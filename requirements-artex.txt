@@ -1,0 +1,5 @@
+# Minimal runtime for the vendored ar_chatbot subset (mirror chatbot pins)
+agno>=0.1.0
+python-dotenv>=1.0.0
+httpx>=0.24.0
+urllib3

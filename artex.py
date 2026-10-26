@@ -55,11 +55,12 @@ INTERNAL_ONLY_COMMANDS = {"customer"}
 
 
 def chatbot_root() -> Path:
-    """Locate the ar_chatbot repo to import from.
+    """Locate the ar_chatbot package to import from.
 
     Resolution order: ARTEX_CHATBOT_ROOT env → the repo containing this script
-    (skill is symlinked from ~/.agents/skills, __file__ resolves to the repo) →
-    ~/ar/chatbot main checkout.
+    (skill living inside the chatbot repo) → ~/ar/chatbot main checkout →
+    the vendored subset shipped next to this script (self-contained installs
+    on machines without the ~/ar workspace). Falls back to ~/ar/chatbot.
     """
     env_root = os.environ.get("ARTEX_CHATBOT_ROOT")
     if env_root:
@@ -67,6 +68,11 @@ def chatbot_root() -> Path:
     here = Path(__file__).resolve().parent
     if (here.parent.parent / "ar_chatbot").is_dir():
         return here.parent.parent
+    if (DEFAULT_CHATBOT_ROOT / "ar_chatbot").is_dir():
+        return DEFAULT_CHATBOT_ROOT
+    vendored = here / "vendor"
+    if (vendored / "ar_chatbot").is_dir():
+        return vendored
     return DEFAULT_CHATBOT_ROOT
 
 
@@ -138,10 +144,12 @@ class ApiKeyOdooClient:
     def __init__(self, url: str, db: str, login: str, api_key: str, verify_ssl: bool = False):
         from ar_chatbot.scripts.lib.odoo_client import OdooClient
 
-        # Parent __init__ auto-logins when user/password are provided; an
-        # API key would fail that web-session login, so pass no credentials
-        # and set them afterwards.
-        self._odoo = OdooClient(url=url, db=db, verify_ssl=verify_ssl)
+        # Parent __init__ auto-logins when url/db/user/password all resolve
+        # (falling back to ODOO_* env vars) — an API key would fail that
+        # web-session login. Pass an empty db to skip the auto-login, then
+        # restore it.
+        self._odoo = OdooClient(url=url, db="", verify_ssl=verify_ssl)
+        self._odoo.db = db
         self._odoo.user = login
         self._odoo.password = api_key
         self.url = self._odoo.url
@@ -223,12 +231,15 @@ class ApiKeyOdooClient:
 
 
 class PortalIdentity:
-    def __init__(self, login: str, client, binding):
+    def __init__(self, login, client, binding, odoo_url=None, odoo_db=None):
         self.login = login
         self.client = client
         self.binding = binding
         self.user_type = binding.user_type
         self.partner_id = binding.partner_id
+        # environment actually used (identities coords win over .env) — banner
+        self.odoo_url = odoo_url or os.environ.get("ODOO_URL", "")
+        self.odoo_db = odoo_db or os.environ.get("ODOO_DB", "")
 
 
 class SystemIdentity:
@@ -242,7 +253,9 @@ def identities_dir() -> Path:
 
 
 def read_identity_file(alias: str) -> Optional[dict]:
-    """Read ~/.config/artex/identities/<alias>.env → {login, credential}."""
+    """Read ~/.config/artex/identities/<alias>.env → {login, credential,
+    odoo_url?, odoo_db?}. The odoo_* keys (written by `artex login`) make the
+    identity self-sufficient on machines without a chatbot .env."""
     path = identities_dir() / f"{alias}.env"
     if not path.is_file():
         return None
@@ -252,7 +265,12 @@ def read_identity_file(alias: str) -> Optional[dict]:
     login = values.get("ARTEX_LOGIN")
     cred = values.get("ARTEX_CREDENTIAL")
     if login and cred:
-        return {"login": login, "credential": cred}
+        return {
+            "login": login,
+            "credential": cred,
+            "odoo_url": values.get("ARTEX_ODOO_URL"),
+            "odoo_db": values.get("ARTEX_ODOO_DB"),
+        }
     return None
 
 
@@ -308,11 +326,17 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
 
     login: Optional[str] = None
     credential: Optional[str] = password_arg
+    odoo_url_env: Optional[str] = None
+    odoo_db_env: Optional[str] = None
 
     identity_file = read_identity_file(as_arg)
     if identity_file:
         login = identity_file["login"]
         credential = credential or identity_file["credential"]
+        # environment coordinates from the identities file win over any .env
+        # (self-sufficient on machines without a chatbot checkout)
+        odoo_url_env = identity_file.get("odoo_url")
+        odoo_db_env = identity_file.get("odoo_db")
     elif "@" in as_arg:
         login = as_arg
     else:
@@ -332,16 +356,18 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
     if re.fullmatch(r"[0-9a-f]{40}", credential or ""):
         # API key(identities 由 artex login 生成):走 /jsonrpc service 層
         # (Odoo web session 端點設計上拒絕 API key)
+        odoo_url = odoo_url_env or os.environ.get("ODOO_URL", "")
+        odoo_db = odoo_db_env or os.environ.get("ODOO_DB", "")
         client = ApiKeyOdooClient(
-            url=os.environ.get("ODOO_URL", ""),
-            db=os.environ.get("ODOO_DB", ""),
+            url=odoo_url,
+            db=odoo_db,
             login=login,
             api_key=credential,
             verify_ssl=verify_ssl,
         )
         uid = client.authenticate()
         profile = client._jsonrpc("object", "execute_kw", [
-            os.environ.get("ODOO_DB", ""), uid, credential,
+            odoo_db, uid, credential,
             "res.users", "read", [[uid]], {
                 "fields": ["name", "login", "partner_id", "share", "email"],
             },
@@ -393,7 +419,7 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
     )
     if binding.user_type == "portal" and not binding.partner_id:
         raise SystemExit("artex: portal 帳號缺少 partner_id,拒絕執行(權限無法收斂)。")
-    return PortalIdentity(login, client, binding)
+    return PortalIdentity(login, client, binding, odoo_url=odoo_url_env, odoo_db=odoo_db_env)
 
 
 def build_tools(identity):
@@ -426,8 +452,12 @@ def enforce_identity_matrix(args, identity) -> None:
 
 def banner(identity, internal_view: bool, stream=None) -> None:
     stream = stream or sys.stderr
-    db = os.environ.get("ODOO_DB", "?")
-    url = os.environ.get("ODOO_URL", "")
+    if isinstance(identity, PortalIdentity):
+        db = identity.odoo_db or "?"
+        url = identity.odoo_url
+    else:
+        db = os.environ.get("ODOO_DB", "?")
+        url = os.environ.get("ODOO_URL", "")
     host = url.split("//")[-1].split("/")[0] if url else "?"
     if isinstance(identity, PortalIdentity):
         who = f"portal {identity.login} ({identity.user_type}, partner {identity.partner_id})"
@@ -447,20 +477,27 @@ REQUIRED_ENV = ["ODOO_URL", "ODOO_DB"]
 
 
 def cmd_doctor() -> int:
-    env_file = os.environ.get("ARTEX_ENV_FILE_LOADED", "(未找到 .env)")
+    env_file = os.environ.get("ARTEX_ENV_FILE_LOADED")
     print(f"chatbot root : {chatbot_root()}")
-    print(f"env file     : {env_file}")
-    print(f"identities   : {identities_dir()} ({len(list(identities_dir().glob('*.env')))} 個)")
-    missing = [k for k in REQUIRED_ENV if not os.environ.get(k)]
-    missing_creds = not (os.environ.get("ODOO_USER") or os.environ.get("ODOO_USER_INTERNAL"))
+    print(f"env file     : {env_file or '(未找到 .env)'}")
+    idents = list(identities_dir().glob("*.env"))
+    print(f"identities   : {identities_dir()} ({len(idents)} 個)")
     url = os.environ.get("ODOO_URL", "")
+    has_creds = bool(os.environ.get("ODOO_USER") or os.environ.get("ODOO_USER_INTERNAL"))
     print(f"ODOO_URL     : {url or '(未設置)'}")
     print(f"ODOO_DB      : {os.environ.get('ODOO_DB', '(未設置)')}")
     print(f"ODOO_USER    : {os.environ.get('ODOO_USER') or os.environ.get('ODOO_USER_INTERNAL', '') or '(未設置)'}")
-    if missing or missing_creds:
-        print(f"FAIL: 缺少環境變量 {missing + (['ODOO_USER(_INTERNAL)'] if missing_creds else [])}")
-        return 2
-    if not url:
+    if not has_creds:
+        print(
+            "客戶模式(無系統憑證):公共目錄查詢與 --as 客戶身份可用;"
+            "內部視角(--internal-view)不可用。先跑 artex login 綁定客戶身份。"
+        )
+        if not url:
+            print("doctor: PASS (customer mode)")
+            return 0
+
+    if not has_creds or not url:
+        print("FAIL: 缺少 ODOO_URL 或系統憑證(內部模式必需)。")
         return 2
 
     import_ar_chatbot()
@@ -550,22 +587,29 @@ def cmd_login(args) -> int:
     login_name = payload.get("login", "")
     api_key = payload.get("api_key", "")
     alias = payload.get("customer_code") or login_name.split("@")[0] or "default"
+    odoo_url = payload.get("odoo_url") or os.environ.get("ODOO_URL", "")
+    odoo_db = payload.get("odoo_db") or os.environ.get("ODOO_DB", "")
 
     ident_dir = identities_dir()
     ident_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(ident_dir, 0o700)
     ident_file = ident_dir / f"{alias}.env"
-    ident_file.write_text(f"ARTEX_LOGIN={login_name}\nARTEX_CREDENTIAL={api_key}\n")
+    lines = [f"ARTEX_LOGIN={login_name}", f"ARTEX_CREDENTIAL={api_key}"]
+    if odoo_url:
+        lines.append(f"ARTEX_ODOO_URL={odoo_url}")
+    if odoo_db:
+        lines.append(f"ARTEX_ODOO_DB={odoo_db}")
+    ident_file.write_text("\n".join(lines) + "\n")
     os.chmod(ident_file, 0o600)
 
     print(f"\n授權成功:{login_name}({payload.get('user_type')}, partner {payload.get('partner_id')})")
     print(f"憑證已寫入 {ident_file}(0600,僅本機)。")
 
-    # 驗證:用拿到的 key 直連 Odoo 認一次
+    # 驗證:用拿到的 key 直連 Odoo 認一次(identities 自帶環境坐標,不依賴 .env)
     import_ar_chatbot()
     client = ApiKeyOdooClient(
-        url=os.environ.get("ODOO_URL", ""),
-        db=os.environ.get("ODOO_DB", ""),
+        url=odoo_url,
+        db=odoo_db,
         login=login_name,
         api_key=api_key,
         verify_ssl=os.getenv("ODOO_VERIFY_SSL", "false").lower() == "true",
