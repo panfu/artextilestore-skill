@@ -1,0 +1,54 @@
+# artextilestore skill — agent 安装说明
+
+> 本文件供 coding agent(Claude Code / ZCode / Codex)阅读并执行。
+> 用户指令示例:"Install artextilestore skill for me by reading
+> https://github.com/panfu/artextilestore-skill/blob/main/llms.txt"
+
+## 这是什么
+
+artex CLI skill:让 coding agent 具备 Artextile(Odoo)业务数据能力——
+查产品/库存/色卡/染缸/客户/订单/报价,支持以客户真实 portal 身份
+(`--as`,Odoo 原生权限)与内部视角(`--internal-view`)双轨查询。
+本仓库是 skill 的**分发源**;开发源在 chatbot 仓库
+(`skills/artextilestore/`,PR #369)。
+
+## 前置检查(安装前逐项确认,任一缺失则停下告知用户)
+
+1. `~/ar/chatbot` 存在且含 `ar_chatbot/` 目录(artex.py 运行时 import 它)。
+2. `~/ar/chatbot/.venv/bin/python` 存在(执行环境)。缺失时执行:
+   `cd ~/ar/chatbot && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+3. `~/ar/chatbot/.env` 含 `ODOO_URL/ODOO_DB/ODOO_USER/ODOO_PASSWORD`
+   (缺失或失效的排障:`~/ar/chatbot/.venv/bin/python <安装目录>/artex.py doctor`)。
+4. `gh` 已认证(私有库 clone 需要),或已配置 GitHub SSH key。
+
+## 安装步骤(依次执行)
+
+```bash
+# 1) clone(若目标已存在则 git pull 更新)
+[ -d ~/ar/artextilestore-skill/.git ] && git -C ~/ar/artextilestore-skill pull \
+  || git clone git@github.com:panfu/artextilestore-skill.git ~/ar/artextilestore-skill
+
+# 2) 安装(symlink 三家客户端 + 快捷方式;幂等,重跑即更新指向)
+bash ~/ar/artextilestore-skill/install.sh
+
+# 3) 验证(应输出能力清单;再跑 doctor 验证环境)
+~/ar/chatbot/.venv/bin/python ~/.agents/skills/artextilestore/artex.py list
+~/ar/chatbot/.venv/bin/python ~/.agents/skills/artextilestore/artex.py doctor
+```
+
+安装成功后**提醒用户**:新开会话才会加载新 skill;
+可用 `artex login --bridge <bridge地址>` 引导客户授权(见 SKILL.md)。
+
+## 安全红线(必须遵守)
+
+- 本仓库与 skill 输出中**不得**出现任何账号/密码/API key;凭据只存于
+  本机 `~/ar/chatbot/.env` 与 `~/.config/artex/identities/`(0600)。
+- 不要把 skill 目录复制进任何 git 仓库的工作区或提交内容。
+- 客户视角操作必须 `--as <客户>`(真实 portal 权限);内部视角输出
+  (`--internal-view`)不得转发给客户。
+
+## 卸载
+
+```bash
+bash ~/ar/artextilestore-skill/install.sh --uninstall
+```
