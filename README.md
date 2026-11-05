@@ -27,9 +27,19 @@ bash ~/artex-skill-src/install.sh
 
 ## 安装后(客户模式)
 
+两种入口,任选:
+
 ```bash
-artex login --bridge <bridge 地址>   # 浏览器一次确认,取回专属 API key(可随时在 Odoo 撤销)
+# A) 引导式(推荐):浏览器一次确认,取回专属 API key(可随时在 Odoo 撤销)
+artex login --bridge <bridge 地址>
 artex --as <客户码> orders           # 以客户真实权限查询
+
+# B) 快速启动:拿到 Odoo 签发的 API key 后手工配置(三行,之后不用 --as)
+artex set odoo_login <login邮箱>
+artex set odoo_api_key <API key>
+# 默认连生产 https://www.artextilestore.com;测试期切 UAT:
+# artex set odoo_base_url https://main-artextile-uat-39657068.dev.odoo.com
+artex orders
 ```
 
 ## 开发与同步

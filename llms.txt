@@ -38,8 +38,12 @@ bash ~/artex-skill-src/install.sh
 
 安装成功后**提醒用户**:
 1. 新开会话才会加载新 skill;
-2. 客户身份:`artex login --bridge <bridge 地址>`(浏览器一次确认),
-   之后 `--as <客户码>` 直接查询;
+2. 客户身份两种入口任选:
+   - 引导式:`artex login --bridge <bridge 地址>`(浏览器一次确认),
+     之后 `--as <客户码>` 直接查询;
+   - 快速启动(已有 Odoo 签发的 API key):`artex set odoo_login <邮箱>`
+     + `artex set odoo_api_key <key>`,之后不带 `--as` 直接查询;
+     默认连生产,测试期 `artex set odoo_base_url <UAT地址>` 一行切换;
 3. `--internal-view`(内部视角/含价格备注)仅在配置了系统凭据的
    内部机器可用,输出不得转发给客户。
 

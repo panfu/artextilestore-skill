@@ -62,3 +62,43 @@ portal 账号)。多 portal 账号或无 portal 账号时报错并给出候选�
 # 客户搜索(结果含内部备注 x_studio_customer_remarks —— 物流要求/折扣门槛等)
 artex.py customer Marubeni
 ```
+
+## 全局配置(set / unset)
+
+配置文件 `~/.config/artex/config.env`(0600,目录 0700),纯本地操作、不碰网络:
+
+```bash
+artex.py set                                    # 列出全部配置 + 当前生效环境
+artex.py set odoo_base_url                      # 只看某一项(api_key 自动打码)
+artex.py set odoo_base_url https://main-artextile-uat-39657068.dev.odoo.com
+artex.py set odoo_login customer@wear.com
+artex.py set odoo_api_key 9f8e7d6c...           # 非 40 位 hex 会警告但仍保存
+artex.py set odoo_db main-artextile-uat-39657068
+artex.py unset odoo_base_url
+```
+
+| 设置项 | 作用 | 默认 |
+|---|---|---|
+| `odoo_base_url` | Odoo 地址,**全局开关**(压过 .env 与 identities 坐标) | `https://www.artextilestore.com` |
+| `odoo_login` | 默认身份:设置后不带 `--as` 直接以该 portal 身份运行 | 无(系统身份) |
+| `odoo_api_key` | 全局 API key,凭证链兜底;一律走 /jsonrpc | 无 |
+| `odoo_db` | 数据库名;`*.dev.odoo.com` 域名可自动推断(子域即库名) | 按推断/环境 |
+
+**环境坐标优先级**
+
+- URL:`odoo_base_url` > identities 文件 `ARTEX_ODOO_URL` > `.env` 的 `ODOO_URL` > 生产默认
+- DB:`odoo_db` > 按 URL 推断(`*.dev.odoo.com`) > identities `ARTEX_ODOO_DB` > `.env` 的 `ODOO_DB` > 生产默认(仅生产域)
+- 凭证:`--password` > identities `ARTEX_CREDENTIAL` > `ARTEX_PORTAL_PASSWORD` > `odoo_api_key`
+- 身份:显式 `--as` / `--internal-view` > `odoo_login` > 系统身份
+
+**典型场景**
+
+```bash
+# 测试期切 UAT(一行;所有命令含既有 --as 身份都跟着切)
+artex.py set odoo_base_url https://main-artextile-uat-39657068.dev.odoo.com
+
+# 客户快速启动(拿到 Odoo 签发的 API key 后三行;之后 artex orders 直接跑)
+artex.py set odoo_login customer@wear.com
+artex.py set odoo_api_key <key>
+# 生产默认地址可省 odoo_base_url;UAT 则按上面一行切换
+```

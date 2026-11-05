@@ -31,6 +31,22 @@ artex.py login --bridge https://uat.artexbridge.com   # ARTEX_BRIDGE_URL 可替�
 
 生成授权链接(自动打开浏览器)→ 用户在 Odoo 页面**一次确认** → CLI 自动取回专属 API key 写入 `~/.config/artex/identities/<客户码>.env`(0600)。全程不向 bridge/CLI 提供密码;key 可随时在 Odoo 用户设置 → API Keys 撤销,撤销后重跑 `artex login` 即可。之后所有 `--as <客户码>` 直接可用。
 
+## 全局配置与快速启动(artex set)
+
+```bash
+artex.py set                                # 查看全部配置与生效环境
+artex.py set odoo_base_url https://main-artextile-uat-39657068.dev.odoo.com   # 测试期切 UAT
+artex.py set odoo_login customer@wear.com   # 默认身份(可不带 --as 直接跑)
+artex.py set odoo_api_key <40位hex>         # 直接配 API key(客户快速启动)
+artex.py set odoo_db <库名>                 # 仅自定义域名时需要(dev.odoo.com 自动推断)
+artex.py unset odoo_base_url                # 清除一项
+```
+
+- 存 `~/.config/artex/config.env`(0600)。`odoo_base_url` 默认 `https://www.artexilestore.com`(生产)。
+- **`odoo_base_url` 一经设置即全局生效**,压过 .env 与 identities 文件里的环境坐标——切 UAT 一行搞定;`*.dev.odoo.com` 域名自动推断库名。
+- 快速启动三件套:`set odoo_base_url`(可省)+ `set odoo_login` + `set odoo_api_key`,之后 `artex orders` 不带 `--as` 即以该客户身份执行(显式 `--as` / `--internal-view` 仍优先)。
+- 凭证优先级:`--password` > identities 文件 > `ARTEX_PORTAL_PASSWORD` > config 的 `odoo_api_key`。
+
 ## 身份与权限(最重要,先读)
 
 | 你要做什么 | 怎么调 |
@@ -60,7 +76,7 @@ artex.py login --bridge https://uat.artexbridge.com   # ARTEX_BRIDGE_URL 可替�
 公共(直接调):`product` / `product-search` / `brand` / `sample-book` / `stock`
 客户资料(须 `--as` 或 `--internal-view`):`orders` / `order` / `order-history` / `dye-lot` / `addresses` / `price-quote` / `carriers` / `small-order-check`
 仅内部:`customer`
-元:`doctor` / `list`
+元:`doctor` / `list` / `set` / `unset`
 
 参数与示例:`references/capabilities.md`;Odoo 模型与数据背景:`references/odoo-context.md`。
 

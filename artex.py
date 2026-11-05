@@ -19,8 +19,14 @@
 - 僅內部:customer(含內部客戶備註 x_studio_customer_remarks)— 僅系統身份
 
 憑證治理:portal 憑證(--password / ARTEX_PORTAL_PASSWORD /
-~/.config/artex/identities/<別名>.env 的 ARTEX_CREDENTIAL)僅在本次進程內
-換取 session,不寫盤、不緩存。
+~/.config/artex/identities/<別名>.env 的 ARTEX_CREDENTIAL / artex set
+odoo_api_key 全局配置)僅在本次進程內換取 session,不寫盤、不緩存(config
+與 identities 檔本身除外,均 0600)。
+
+全局配置(artex set):odoo_base_url / odoo_login / odoo_api_key / odoo_db,
+存 ~/.config/artex/config.env。odoo_base_url 一經設置即全局切換環境(壓過
+.env 與 identities 檔內的環境坐標);odoo_login + odoo_api_key 供客戶快速
+啟動 —— 配好後不帶 --as 直接執行,即以該 portal 身份運行。
 """
 from __future__ import annotations
 
@@ -39,6 +45,20 @@ from typing import Any, Dict, Optional
 
 DEFAULT_CHATBOT_ROOT = Path.home() / "ar" / "chatbot"
 DEFAULT_IDENTITIES_DIR = Path.home() / ".config" / "artex" / "identities"
+DEFAULT_CONFIG_DIR = Path.home() / ".config" / "artex"
+
+# 生產默認坐標(artex set 未設置且無 .env 時的兜底;db 名取自生產構建,
+# Odoo.sh 生產升級沿用同一數據庫,名稱不變)
+DEFAULT_ODOO_BASE_URL = "https://www.artextilestore.com"
+DEFAULT_ODOO_DB = "odoo-ps-pshk-artextile-international-main-4051457"
+
+# artex set 設置項:CLI 名 → config.env 檔內鍵名
+CONFIG_KEYS = {
+    "odoo_base_url": "ODOO_BASE_URL",
+    "odoo_login": "ODOO_LOGIN",
+    "odoo_api_key": "ODOO_API_KEY",
+    "odoo_db": "ODOO_DB",
+}
 
 PUBLIC_COMMANDS = {"product", "product-search", "brand", "sample-book", "stock"}
 CUSTOMER_DATA_COMMANDS = {
@@ -274,6 +294,115 @@ def read_identity_file(alias: str) -> Optional[dict]:
     return None
 
 
+# ── 全局配置層(artex set) ─────────────────────────────────────────
+
+
+def config_file() -> Path:
+    return Path(os.environ.get("ARTEX_CONFIG_FILE", DEFAULT_CONFIG_DIR / "config.env"))
+
+
+def load_artex_config() -> Dict[str, str]:
+    """Read ~/.config/artex/config.env → {odoo_base_url, odoo_login,
+    odoo_api_key, odoo_db}(只含已設置且非空的項)。"""
+    path = config_file()
+    if not path.is_file():
+        return {}
+    from dotenv import dotenv_values
+
+    values = dotenv_values(path)
+    cfg: Dict[str, str] = {}
+    for cli_name, file_key in CONFIG_KEYS.items():
+        v = (values.get(file_key) or "").strip()
+        if v:
+            cfg[cli_name] = v
+    return cfg
+
+
+def write_artex_config(cfg: Dict[str, str]) -> Path:
+    """Rewrite config.env from a full {cli_name: value} dict (missing keys
+    are dropped → unset). Dir 0700 / file 0600, same governance as identities.
+    Only tightens directories we created (or the artex-owned default) —
+    never chmods a pre-existing foreign parent like /tmp."""
+    path = config_file()
+    parent = path.parent
+    created = not parent.is_dir()
+    parent.mkdir(parents=True, exist_ok=True)
+    if created or parent == DEFAULT_CONFIG_DIR:
+        try:
+            os.chmod(parent, 0o700)
+        except OSError:
+            pass
+    lines = [f"{CONFIG_KEYS[k]}={cfg[k]}" for k in CONFIG_KEYS if k in cfg]
+    path.write_text("\n".join(lines) + "\n")
+    os.chmod(path, 0o600)
+    return path
+
+
+def mask_secret(value: str) -> str:
+    if len(value) >= 10:
+        return f"{value[:4]}…{value[-4:]}"
+    return "****"
+
+
+def infer_db_from_url(url: str) -> Optional[str]:
+    """Odoo.sh 的 *.dev.odoo.com 構建,數據庫名即首段子域
+    (如 main-artextile-uat-39657068.dev.odoo.com → main-artextile-uat-39657068)。"""
+    host = (url or "").split("//")[-1].split("/")[0].split(":")[0]
+    if host.endswith(".dev.odoo.com"):
+        return host[: -len(".dev.odoo.com")]
+    return None
+
+
+def effective_odoo_url(cfg: Optional[Dict[str, str]] = None, identity_url: Optional[str] = None) -> str:
+    """環境坐標優先級:artex set odoo_base_url > identities 檔坐標 >
+    ODOO_URL 環境變量(.env)> 生產默認。"""
+    cfg = cfg if cfg is not None else load_artex_config()
+    return (
+        cfg.get("odoo_base_url")
+        or identity_url
+        or os.environ.get("ODOO_URL", "")
+        or DEFAULT_ODOO_BASE_URL
+    )
+
+
+def effective_odoo_db(
+    cfg: Optional[Dict[str, str]] = None,
+    url: Optional[str] = None,
+    identity_db: Optional[str] = None,
+) -> str:
+    """db 優先級:artex set odoo_db > 按 URL 推斷(*.dev.odoo.com)>
+    identities 檔坐標 > ODOO_DB 環境變量 > 生產默認(僅當 URL 為生產域)。"""
+    cfg = cfg if cfg is not None else load_artex_config()
+    url = url or effective_odoo_url(cfg)
+    if cfg.get("odoo_db"):
+        return cfg["odoo_db"]
+    inferred = infer_db_from_url(url)
+    if inferred:
+        return inferred
+    if identity_db:
+        return identity_db
+    env_db = os.environ.get("ODOO_DB", "")
+    if env_db:
+        return env_db
+    host = (url or "").split("//")[-1].split("/")[0].split(":")[0]
+    if host == "www.artextilestore.com":
+        return DEFAULT_ODOO_DB
+    return ""
+
+
+def apply_config_overrides() -> Dict[str, str]:
+    """把配置層解析結果注入 ODOO_URL/ODOO_DB 環境變量 —— 系統身份、doctor、
+    客戶碼解析等所有既有 os.environ 讀取點零改動地跟隨全局切換。"""
+    cfg = load_artex_config()
+    url = effective_odoo_url(cfg)
+    db = effective_odoo_db(cfg, url)
+    if url:
+        os.environ["ODOO_URL"] = url
+    if db:
+        os.environ["ODOO_DB"] = db
+    return cfg
+
+
 def resolve_customer_code_to_login(code: str) -> str:
     """客戶碼(如 E0056)/ partner_id → portal login(用系統帳號解析公共元數據)。"""
     from ar_chatbot.scripts.lib.odoo_client import OdooClient
@@ -318,8 +447,9 @@ def resolve_customer_code_to_login(code: str) -> str:
 def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIdentity:
     """--as <login|客戶碼|identities 別名> → 真實 portal session + binding 替身。
 
-    憑證優先級:--password > ARTEX_PORTAL_PASSWORD > identities 檔 ARTEX_CREDENTIAL。
-    憑證只在本進程內換 session,不落盤。
+    憑證優先級:--password > identities 檔 ARTEX_CREDENTIAL > ARTEX_PORTAL_PASSWORD
+    > artex set odoo_api_key(config 來源一律走 API key 路徑,不作密碼嘗試)。
+    憑證只在本進程內換 session,不落盤(config 與 identities 檔本身除外)。
     """
     from ar_chatbot.auth.models import OdooUserBinding
     from ar_chatbot.scripts.lib.odoo_client import OdooClient
@@ -329,12 +459,15 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
     odoo_url_env: Optional[str] = None
     odoo_db_env: Optional[str] = None
 
+    cfg = load_artex_config()
+
     identity_file = read_identity_file(as_arg)
     if identity_file:
         login = identity_file["login"]
         credential = credential or identity_file["credential"]
         # environment coordinates from the identities file win over any .env
-        # (self-sufficient on machines without a chatbot checkout)
+        # (self-sufficient on machines without a chatbot checkout) — but a
+        # config-level odoo_base_url still wins over them (global switch)
         odoo_url_env = identity_file.get("odoo_url")
         odoo_db_env = identity_file.get("odoo_db")
     elif "@" in as_arg:
@@ -344,20 +477,27 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
 
     if not credential:
         credential = os.environ.get("ARTEX_PORTAL_PASSWORD")
+    credential_from_config = False
+    if not credential:
+        credential = cfg.get("odoo_api_key")
+        credential_from_config = bool(credential)
     if not credential:
         raise SystemExit(
-            f"artex: 沒有 '{login}' 的憑證。三種供給方式:"
+            f"artex: 沒有 '{login}' 的憑證。四種供給方式:"
             f"(1) {identities_dir()}/{as_arg}.env 寫 ARTEX_LOGIN/ARTEX_CREDENTIAL;"
-            "(2) 環境變量 ARTEX_PORTAL_PASSWORD;(3) --password(會進 shell 歷史,不建議)。"
+            "(2) 環境變量 ARTEX_PORTAL_PASSWORD;(3) artex set odoo_api_key(快速啟動);"
+            "(4) --password(會進 shell 歷史,不建議)。"
         )
 
     verify_ssl = os.getenv("ODOO_VERIFY_SSL", "false").lower() == "true"
 
-    if re.fullmatch(r"[0-9a-f]{40}", credential or ""):
-        # API key(identities 由 artex login 生成):走 /jsonrpc service 層
-        # (Odoo web session 端點設計上拒絕 API key)
-        odoo_url = odoo_url_env or os.environ.get("ODOO_URL", "")
-        odoo_db = odoo_db_env or os.environ.get("ODOO_DB", "")
+    # 環境坐標:artex set odoo_base_url 是全局開關,壓過 identities 檔與 .env
+    odoo_url = effective_odoo_url(cfg, odoo_url_env)
+    odoo_db = effective_odoo_db(cfg, odoo_url, odoo_db_env)
+
+    if credential_from_config or re.fullmatch(r"[0-9a-f]{40}", credential or ""):
+        # API key(identities 由 artex login 生成 / artex set odoo_api_key 配置):
+        # 走 /jsonrpc service 層(Odoo web session 端點設計上拒絕 API key)
         client = ApiKeyOdooClient(
             url=odoo_url,
             db=odoo_db,
@@ -380,8 +520,8 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
         email = row.get("email")
     else:
         client = OdooClient(
-            url=os.environ.get("ODOO_URL", ""),
-            db=os.environ.get("ODOO_DB", ""),
+            url=odoo_url,
+            db=odoo_db,
             user=login,
             password=credential,
             verify_ssl=verify_ssl,
@@ -409,7 +549,7 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
         odoo_username=login,
         odoo_password_encrypted="",
         odoo_uid=uid,
-        odoo_db=os.environ.get("ODOO_DB", ""),
+        odoo_db=odoo_db,
         is_active=True,
         verification_status="verified",
         display_name=display_name,
@@ -419,7 +559,7 @@ def build_portal_identity(as_arg: str, password_arg: Optional[str]) -> PortalIde
     )
     if binding.user_type == "portal" and not binding.partner_id:
         raise SystemExit("artex: portal 帳號缺少 partner_id,拒絕執行(權限無法收斂)。")
-    return PortalIdentity(login, client, binding, odoo_url=odoo_url_env, odoo_db=odoo_db_env)
+    return PortalIdentity(login, client, binding, odoo_url=odoo_url, odoo_db=odoo_db)
 
 
 def build_tools(identity):
@@ -480,6 +620,11 @@ def cmd_doctor() -> int:
     env_file = os.environ.get("ARTEX_ENV_FILE_LOADED")
     print(f"chatbot root : {chatbot_root()}")
     print(f"env file     : {env_file or '(未找到 .env)'}")
+    cfg = load_artex_config()
+    cpath = config_file()
+    print(f"config       : {cpath}" + ("" if cpath.is_file() else "(尚未創建)"))
+    for key in CONFIG_KEYS:
+        print(f"  {key:<14}= {_describe_config_value(key, cfg)}")
     idents = list(identities_dir().glob("*.env"))
     print(f"identities   : {identities_dir()} ({len(idents)} 個)")
     url = os.environ.get("ODOO_URL", "")
@@ -490,7 +635,9 @@ def cmd_doctor() -> int:
     if not has_creds:
         print(
             "客戶模式(無系統憑證):公共目錄查詢與 --as 客戶身份可用;"
-            "內部視角(--internal-view)不可用。先跑 artex login 綁定客戶身份。"
+            "內部視角(--internal-view)不可用。\n"
+            "快速啟動:artex set odoo_login <login> + artex set odoo_api_key <key>;"
+            "或 artex login 綁定客戶身份。"
         )
         if not url:
             print("doctor: PASS (customer mode)")
@@ -529,6 +676,75 @@ def cmd_doctor() -> int:
 
 def cmd_list() -> int:
     print(__doc__)
+    return 0
+
+
+# ── set / unset(全局配置層) ───────────────────────────────────────
+
+
+def _describe_config_value(key: str, cfg: Dict[str, str]) -> str:
+    value = cfg.get(key)
+    if value is None:
+        if key == "odoo_base_url":
+            return f"(未設置 → 默認 {DEFAULT_ODOO_BASE_URL})"
+        if key == "odoo_db":
+            return "(未設置 → 按URL推斷/環境)"
+        return "(未設置)"
+    return mask_secret(value) if key == "odoo_api_key" else value
+
+
+def cmd_set(args) -> int:
+    if not args.key:
+        cfg = load_artex_config()
+        path = config_file()
+        print(f"配置文件:{path}" + ("" if path.is_file() else "(尚未創建)"))
+        for key in CONFIG_KEYS:
+            print(f"  {key:<14}= {_describe_config_value(key, cfg)}")
+        url = effective_odoo_url(cfg)
+        print(f"\n生效環境(按 config + 當前進程環境):URL={url} DB={effective_odoo_db(cfg, url) or '?'}")
+        print("設置:artex set <key> <value>;清除:artex unset <key>")
+        return 0
+    if args.key not in CONFIG_KEYS:
+        raise SystemExit(f"artex: 未知設置項 '{args.key}'。可用:{', '.join(CONFIG_KEYS)}")
+    if args.value is None:
+        cfg = load_artex_config()
+        print(f"{args.key} = {_describe_config_value(args.key, cfg)}")
+        return 0
+    value = args.value.strip()
+    if not value:
+        raise SystemExit(f"artex: 值不能為空;清除請用 artex unset {args.key}")
+    if args.key == "odoo_base_url":
+        if not re.match(r"^https?://", value):
+            raise SystemExit(f"artex: odoo_base_url 需以 http:// 或 https:// 開頭,得到:{value}")
+        value = value.rstrip("/")
+    if args.key == "odoo_api_key" and not re.fullmatch(r"[0-9a-f]{40}", value):
+        print(
+            "警告:該值不是 40 位十六進制 Odoo API key(仍已保存;若認證失敗請核對粘貼內容)。",
+            file=sys.stderr,
+        )
+    cfg = load_artex_config()
+    cfg[args.key] = value
+    path = write_artex_config(cfg)
+    shown = mask_secret(value) if args.key == "odoo_api_key" else value
+    print(f"已設置 {args.key} = {shown}")
+    print(f"配置文件:{path}(0600)")
+    if args.key == "odoo_base_url":
+        print(f"提示:全局生效 —— 之後所有命令(含既有 --as 身份)都指向 {shown}")
+    if args.key == "odoo_api_key":
+        print("提示:配合 artex set odoo_login <login> 後,直接運行命令即以該客戶身份執行")
+    return 0
+
+
+def cmd_unset(args) -> int:
+    if args.key not in CONFIG_KEYS:
+        raise SystemExit(f"artex: 未知設置項 '{args.key}'。可用:{', '.join(CONFIG_KEYS)}")
+    cfg = load_artex_config()
+    if args.key not in cfg:
+        print(f"{args.key} 原本就未設置。")
+        return 0
+    del cfg[args.key]
+    path = write_artex_config(cfg)
+    print(f"已清除 {args.key}(配置文件:{path})")
     return 0
 
 
@@ -683,6 +899,16 @@ def add_subcommands(sub) -> None:
     sub.add_parser("list", help="列印能力與身份矩陣")
 
     p = sub.add_parser(
+        "set",
+        help="設置全局配置:odoo_base_url / odoo_login / odoo_api_key / odoo_db",
+    )
+    p.add_argument("key", nargs="?", help="設置項;整體省略則顯示當前配置")
+    p.add_argument("value", nargs="?", help="新值;給 key 不給 value 則只顯示該項當前值")
+
+    p = sub.add_parser("unset", help="清除一個全局配置項")
+    p.add_argument("key")
+
+    p = sub.add_parser(
         "login",
         help="引導式登入:瀏覽器一次確認後取得 API key(設備授權流,經 bridge)",
     )
@@ -758,11 +984,16 @@ def main(argv=None) -> int:
 
     if args.command == "list":
         return cmd_list()
+    if args.command == "set":
+        return cmd_set(args)
+    if args.command == "unset":
+        return cmd_unset(args)
 
     env_path = load_env_file(args.env_file)
     if env_path:
         os.environ["ARTEX_ENV_FILE_LOADED"] = str(env_path)
     map_internal_creds()
+    cfg = apply_config_overrides()
 
     if args.command == "doctor":
         return cmd_doctor()
@@ -770,8 +1001,12 @@ def main(argv=None) -> int:
         return cmd_login(args)
 
     import_ar_chatbot()
+    as_who = args.as_who
+    if not as_who and not args.internal_view and cfg.get("odoo_login"):
+        # 快速啟動:config 的 odoo_login 為默認身份(顯式 --as / --internal-view 優先)
+        as_who = cfg["odoo_login"]
     identity = (
-        build_portal_identity(args.as_who, args.password) if args.as_who else SystemIdentity()
+        build_portal_identity(as_who, args.password) if as_who else SystemIdentity()
     )
     enforce_identity_matrix(args, identity)
     tools = build_tools(identity)
