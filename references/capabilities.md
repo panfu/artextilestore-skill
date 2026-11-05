@@ -57,12 +57,8 @@ artex.py --internal-view price-quote E0056 "660302 1600 5Y"
 → 含 `@` 视为 portal login → 其余按客户码解析(res.partner.code → 该客户唯一
 portal 账号)。多 portal 账号或无 portal 账号时报错并给出候选。
 
-## 仅内部
-
-```bash
-# 客户搜索(结果含内部备注 x_studio_customer_remarks —— 物流要求/折扣门槛等)
-artex.py customer Marubeni
-```
+> 本 skill 面向客户使用,内部办公不用它(2026-11-06 定)。
+> `customer` 客户搜索命令(结果含内部备注)已移除,不留任何仅内部命令。
 
 ## 全局配置(set / unset)
 

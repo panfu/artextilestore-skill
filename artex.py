@@ -17,7 +17,9 @@
   (術語:bunch 為 sample book/色卡冊的官方稱謂,一律用 bunch)
 - 客戶資料:orders / order / order-history / dye-lot / addresses / price-quote /
   carriers / small-order-check — 必須 --as 或 --internal-view 二選一
-- 僅內部:customer(含內部客戶備註 x_studio_customer_remarks)— 僅系統身份
+
+定位(2026-11-06 Fred 定):本 skill 面向客戶使用,內部辦公不用它——
+不提供任何僅內部的命令(客戶搜索等已移除),減少面向客戶分發的面。
 
 憑證治理:portal 憑證(--password / ARTEX_PORTAL_PASSWORD /
 ~/.config/artex/identities/<別名>.env 的 ARTEX_CREDENTIAL / artex set
@@ -72,7 +74,6 @@ CUSTOMER_DATA_COMMANDS = {
     "carriers",
     "small-order-check",
 }
-INTERNAL_ONLY_COMMANDS = {"customer"}
 
 
 def chatbot_root() -> Path:
@@ -423,7 +424,7 @@ def resolve_customer_code_to_login(code: str) -> str:
     )
     if not partners:
         raise SystemExit(
-            f"artex: 客戶碼 '{code}' 找不到對應 res.partner(可用 artex customer <名稱> 先確認)"
+            f"artex: 客戶碼 '{code}' 找不到對應 res.partner(請核對客戶碼,或直接用 portal login)"
         )
     if len(partners) > 1:
         names = " / ".join(p["name"] for p in partners)
@@ -584,10 +585,6 @@ def enforce_identity_matrix(args, identity) -> None:
         raise SystemExit(
             f"artex: '{cmd}' 屬客戶資料查詢,不得用系統帳號執行。"
             "客戶視角請加 --as <客戶>;內部視角請顯式加 --internal-view(輸出僅供內部)。"
-        )
-    if cmd in INTERNAL_ONLY_COMMANDS and is_portal:
-        raise SystemExit(
-            "artex: 'customer' 含內部客戶備註,僅限系統身份(內部)執行,portal 身份拒絕。"
         )
 
 
@@ -864,9 +861,6 @@ def add_subcommands(sub) -> None:
     p = sub.add_parser("bunch", help="bunch(色卡冊)內在庫產品(公共,4 位冊號)")
     p.add_argument("book")
 
-    p = sub.add_parser("customer", help="按名稱搜索客戶(僅內部;含內部備註)")
-    p.add_argument("name")
-
     p = sub.add_parser("orders", help="客戶訂單列表(客戶資料)")
     p.add_argument("customer", nargs="?", default="self", help="portal 身份可省略")
     p.add_argument("--days", type=int, default=90)
@@ -937,8 +931,6 @@ def run_command(args, tools) -> str:
         return tools.query_collections(args.name, exact=args.exact, limit=args.limit)
     if cmd == "bunch":
         return tools.query_sample_book(args.book)
-    if cmd == "customer":
-        return tools.search_customer(args.name)
     if cmd == "orders":
         return tools.list_orders(args.customer, days=args.days, state=args.state, limit=args.limit)
     if cmd == "order":
