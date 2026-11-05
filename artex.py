@@ -13,7 +13,7 @@
 - --internal-view:內部視角查看客戶範圍數據(輸出帶警示頭,不得轉發給客戶)。
 
 命令身份矩陣:
-- 公共目錄:product / product-search / brand / sample-book / stock — 兩種身份皆可
+- 公共目錄:product / product-search / brand / sample-book — 兩種身份皆可
 - 客戶資料:orders / order / order-history / dye-lot / addresses / price-quote /
   carriers / small-order-check — 必須 --as 或 --internal-view 二選一
 - 僅內部:customer(含內部客戶備註 x_studio_customer_remarks)— 僅系統身份
@@ -60,7 +60,7 @@ CONFIG_KEYS = {
     "odoo_db": "ODOO_DB",
 }
 
-PUBLIC_COMMANDS = {"product", "product-search", "brand", "sample-book", "stock"}
+PUBLIC_COMMANDS = {"product", "product-search", "brand", "sample-book"}
 CUSTOMER_DATA_COMMANDS = {
     "orders",
     "order",
@@ -855,9 +855,6 @@ def add_subcommands(sub) -> None:
     p = sub.add_parser("sample-book", help="色卡冊內在庫產品(公共,4 位冊號)")
     p.add_argument("book")
 
-    p = sub.add_parser("stock", help="在庫產品清單(公共)")
-    p.add_argument("--limit", type=int, default=20)
-
     p = sub.add_parser("customer", help="按名稱搜索客戶(僅內部;含內部備註)")
     p.add_argument("name")
 
@@ -929,8 +926,6 @@ def run_command(args, tools) -> str:
         return tools.query_brand(args.name)
     if cmd == "sample-book":
         return tools.query_sample_book(args.book)
-    if cmd == "stock":
-        return tools.check_stock(limit=args.limit)
     if cmd == "customer":
         return tools.search_customer(args.name)
     if cmd == "orders":

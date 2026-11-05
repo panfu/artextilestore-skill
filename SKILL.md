@@ -73,7 +73,7 @@ artex.py unset odoo_base_url                # 清除一项
 
 ## 子命令索引
 
-公共(直接调):`product` / `product-search` / `brand` / `sample-book` / `stock`
+公共(直接调):`product` / `product-search` / `brand` / `sample-book`
 客户资料(须 `--as` 或 `--internal-view`):`orders` / `order` / `order-history` / `dye-lot` / `addresses` / `price-quote` / `carriers` / `small-order-check`
 仅内部:`customer`
 元:`doctor` / `list` / `set` / `unset`

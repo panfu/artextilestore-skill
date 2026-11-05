@@ -28,9 +28,6 @@ artex.py brand carnet
 
 # 色卡册(4 位册号)内在库产品
 artex.py sample-book 6606
-
-# 当前在库产品清单
-artex.py stock --limit 20
 ```
 
 ## 客户资料(必须 --as 或 --internal-view)
