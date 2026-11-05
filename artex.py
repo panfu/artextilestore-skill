@@ -13,7 +13,8 @@
 - --internal-view:內部視角查看客戶範圍數據(輸出帶警示頭,不得轉發給客戶)。
 
 命令身份矩陣:
-- 公共目錄:product / product-search / brand / sample-book — 兩種身份皆可
+- 公共目錄:product / product-search / brand / collections / bunch — 兩種身份皆可
+  (術語:bunch 為 sample book/色卡冊的官方稱謂,一律用 bunch)
 - 客戶資料:orders / order / order-history / dye-lot / addresses / price-quote /
   carriers / small-order-check — 必須 --as 或 --internal-view 二選一
 - 僅內部:customer(含內部客戶備註 x_studio_customer_remarks)— 僅系統身份
@@ -60,7 +61,7 @@ CONFIG_KEYS = {
     "odoo_db": "ODOO_DB",
 }
 
-PUBLIC_COMMANDS = {"product", "product-search", "brand", "sample-book"}
+PUBLIC_COMMANDS = {"product", "product-search", "brand", "collections", "bunch"}
 CUSTOMER_DATA_COMMANDS = {
     "orders",
     "order",
@@ -852,7 +853,15 @@ def add_subcommands(sub) -> None:
     p = sub.add_parser("brand", help="品牌/系列查詢(公共)")
     p.add_argument("name")
 
-    p = sub.add_parser("sample-book", help="色卡冊內在庫產品(公共,4 位冊號)")
+    p = sub.add_parser(
+        "collections",
+        help="collections/系列搜索(公共;含品牌與 bunch,oa_chat 同定義)",
+    )
+    p.add_argument("name", help="系列名,如 8239 / Fantasia")
+    p.add_argument("--exact", action="store_true", help="精確匹配(默認模糊)")
+    p.add_argument("--limit", type=int, default=10)
+
+    p = sub.add_parser("bunch", help="bunch(色卡冊)內在庫產品(公共,4 位冊號)")
     p.add_argument("book")
 
     p = sub.add_parser("customer", help="按名稱搜索客戶(僅內部;含內部備註)")
@@ -924,7 +933,9 @@ def run_command(args, tools) -> str:
         return tools.search_products_by_name(args.name, limit=args.limit)
     if cmd == "brand":
         return tools.query_brand(args.name)
-    if cmd == "sample-book":
+    if cmd == "collections":
+        return tools.query_collections(args.name, exact=args.exact, limit=args.limit)
+    if cmd == "bunch":
         return tools.query_sample_book(args.book)
     if cmd == "customer":
         return tools.search_customer(args.name)

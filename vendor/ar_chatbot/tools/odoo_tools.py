@@ -1866,6 +1866,71 @@ class OdooSalesTools(Toolkit):
             logger.error(f"[OdooTools] query_brand error: {e}")
             return f"Error querying brand: {str(e)}"
 
+    def query_collections(self, name: str, exact: bool = False, limit: int = 10) -> str:
+        """Search collections/series by name (fuzzy by default).
+
+        Same definition as the oa_chat customer sales report: every
+        product.public.category under the "Brand & Collection" root (id=1,
+        excluding the root) — brands, collections/series and bunches (sample
+        books) all included. Each hit shows its parent category (breadcrumb)
+        and the shop category link.
+
+        Args:
+            name: Collection/series name (e.g. "8239", "Fantasia", "Hesworth")
+            exact: Exact match instead of case-insensitive partial match
+            limit: Maximum number of results
+
+        Returns:
+            Formatted collection list string
+        """
+        import time
+
+        start_time = time.time()
+        logger.info(f"[OdooTools] query_collections called with: {name!r} (exact={exact})")
+
+        base_url = normalize_odoo_base_url(
+            os.environ.get("ODOO_URL") or "https://www.artextilestore.com"
+        )
+        CATEGORY_BASE_URL = f"{base_url}/shop/category"
+
+        client = self._get_system_client()
+        try:
+            matches = client.search_collection_by_name(name, exact=exact, limit=limit)
+            lines = [
+                "",
+                "=" * 60,
+                f"Collections Query: '{name}'" + (" (exact)" if exact else ""),
+                "=" * 60,
+                "Scope: all categories under Brand & Collection "
+                "(brands, collections/series, bunches)",
+            ]
+            if not matches:
+                lines.append(
+                    f"\nNo collection matches '{name}'. "
+                    "Try a shorter keyword or check spelling."
+                )
+                return "\n".join(lines)
+
+            lines.append(f"\nFound {len(matches)} match(es):")
+            for cat in matches:
+                cat_id = cat.get("id")
+                cat_name = cat.get("name")
+                parent = cat.get("parent_id") or [None, ""]
+                parent_name = parent[1] if isinstance(parent, list) else str(parent)
+                lines.append(f"\n✓ {cat_name}")
+                if parent_name:
+                    lines.append(f"  Parent: {parent_name}")
+                lines.append(f"  Link: {CATEGORY_BASE_URL}/{cat_id}")
+
+            logger.info(
+                f"[OdooTools] query_collections: {len(matches)} hits in "
+                f"{time.time() - start_time:.2f}s"
+            )
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"[OdooTools] query_collections error: {e}")
+            return f"Error querying collections: {str(e)}"
+
     @_require_binding
     def search_products_by_name(self, name: str, limit: int = 10) -> str:
         """
@@ -4545,30 +4610,66 @@ class OdooSalesTools(Toolkit):
             logger.error(f"[OdooTools] set_order_address error: {e}")
             return f"Error: {str(e)}"
 
+    # list_orders grouped-rendering caps: an order with at most
+    # _ORDER_LIST_MAX_INLINE_LINES product lines shows its items inline
+    # under the header; a longer order (e.g. a 20-fabric one) collapses to
+    # a single header line with an item count. If the inline items of the
+    # whole list would still exceed _ORDER_LIST_MAX_TOTAL_LINES (whale
+    # customer, limit=20), every order collapses — use get_order_detail
+    # for a collapsed order's lines.
+    _ORDER_LIST_MAX_INLINE_LINES = 5
+    _ORDER_LIST_MAX_TOTAL_LINES = 60
+
+    @staticmethod
+    def _currency_symbol(currency_field, fallback: str = "HK$") -> str:
+        """Map an Odoo currency m2o field ([id, name] or name) to a symbol."""
+        name = ""
+        if isinstance(currency_field, list) and len(currency_field) > 1:
+            name = str(currency_field[1])
+        elif isinstance(currency_field, str):
+            name = currency_field
+        low = name.lower()
+        if low.startswith("hk") or "港" in name:
+            return "HK$"
+        if low.startswith("cn") or "rmb" in low or "¥" in name or "人民" in name:
+            return "CN¥"
+        if low.startswith("eur") or "€" in name:
+            return "€"
+        if low.startswith("gbp") or "£" in name or "pound" in low:
+            return "£"
+        if low.startswith("us") or "$" in name:
+            return "US$"
+        return name.split()[0] if name else fallback
+
     @_require_binding
     def list_orders(
         self,
         customer: str,
-        days: int = 90,
+        days: int = 60,
         state: Optional[str] = None,
         limit: int = 20,
     ) -> str:
         """
-        List customer's orders.
+        List customer's orders, grouped by order (last 60 days by default).
 
-        Shows orders within a specified time range, optionally filtered by state.
+        Each order renders one header line (date, order number, state,
+        amount) followed by its product lines as `n) code - qty uom`
+        (quantity in the UOM used at ordering, yd or m). Orders with more
+        product lines than the inline cap — or a list whose inline items
+        would grow too long — collapse back to one header line per order
+        with an item count; use get_order_detail(order number) for those.
+        By default cancelled and draft orders are hidden (customers asking
+        for "my orders" mean real orders); pass an explicit state to see them.
 
         Args:
             customer: Customer ID or name keyword
-            days: Time range in days (default 90)
-            state: Filter by state (draft/sent/sale/done/cancel)
+            days: Time range in days (default 60)
+            state: Filter by state (draft/sent/sale/done/cancel); disables the
+                default cancel/draft exclusion
             limit: Maximum results (default 20)
 
-        Returns:
-            Order list with order number, date, state, and amount
-
         Example:
-            list_orders("10640", days=90)  # Last 90 days
+            list_orders("10640")  # Last 60 days
             list_orders("10640", days=30, state="sale")  # Confirmed orders in last 30 days
         """
         try:
@@ -4595,12 +4696,14 @@ class OdooSalesTools(Toolkit):
             if not partner_id:
                 return f"\nCustomer '{customer}' not found"
 
-            # Search orders using OdooClient
+            # Search orders using OdooClient. Without an explicit state filter,
+            # hide cancelled/draft orders (2026-11-01 WeChat feedback).
             orders = client.search_orders(
                 partner_id=partner_id,
                 state=state,
                 days=days,
                 limit=limit,
+                exclude_states=None if state else ["cancel", "draft"],
             )
 
             if not orders:
@@ -4631,6 +4734,52 @@ class OdooSalesTools(Toolkit):
                 "cancel": "Cancelled",
             }
 
+            # Batch-fetch product lines for every listed order (one call).
+            order_ids = [o.get("id") for o in orders if o.get("id")]
+            lines_by_order = {oid: [] for oid in order_ids}
+            product_ids = []
+            if order_ids:
+                try:
+                    rows = client._call(
+                        model="sale.order.line",
+                        method="search_read",
+                        args=[[("order_id", "in", order_ids)]],
+                        kwargs={
+                            "fields": [
+                                "order_id",
+                                "product_id",
+                                "product_uom_qty",
+                                "product_uom",
+                                "is_delivery",
+                                "display_type",
+                            ],
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"[OdooTools] list_orders line fetch failed: {e}")
+                    rows = []
+                for row in rows or []:
+                    if row.get("display_type") or row.get("is_delivery"):
+                        continue
+                    row_order = row.get("order_id")
+                    row_order = row_order[0] if isinstance(row_order, list) else row_order
+                    if row_order not in lines_by_order:
+                        continue
+                    lines_by_order[row_order].append(row)
+                    pid = row.get("product_id")
+                    if isinstance(pid, list) and pid:
+                        product_ids.append(pid[0])
+
+            codes = self._fetch_product_codes(client, product_ids) if product_ids else {}
+
+            # Collapse the whole list when the inline items would get too long.
+            inline_total = sum(
+                len(v)
+                for v in lines_by_order.values()
+                if len(v) <= self._ORDER_LIST_MAX_INLINE_LINES
+            )
+            grouped = inline_total <= self._ORDER_LIST_MAX_TOTAL_LINES
+
             lines = []
             lines.append("\n" + "=" * 70)
             lines.append(f"Order List (Last {days} days)")
@@ -4642,7 +4791,7 @@ class OdooSalesTools(Toolkit):
             for i, order in enumerate(orders, 1):
                 order_name = order.get("name")
                 order_state = order.get("state")
-                amount = order.get("amount_total", 0)
+                amount = order.get("amount_total") or 0
                 date_order = order.get("date_order", "")
 
                 # Format date
@@ -4658,9 +4807,31 @@ class OdooSalesTools(Toolkit):
                     date_str = "N/A"
 
                 state_label = state_labels.get(order_state, order_state)
+                symbol = self._currency_symbol(order.get("currency_id"))
+                header = f"\n[{i}] {date_str} | {order_name} | {state_label} | {symbol} {amount:,.2f}"
 
-                lines.append(f"\n[{i}] {order_name} - {date_str}")
-                lines.append(f"    Status: {state_label} | Amount: HK$ {amount:.2f}")
+                order_lines = lines_by_order.get(order.get("id"), [])
+                if not grouped or len(order_lines) > self._ORDER_LIST_MAX_INLINE_LINES:
+                    if order_lines:
+                        header += f" ({len(order_lines)} item{'s' if len(order_lines) != 1 else ''})"
+                    lines.append(header)
+                    continue
+
+                lines.append(header)
+                for j, ol in enumerate(order_lines, 1):
+                    pid_field = ol.get("product_id")
+                    pid = pid_field[0] if isinstance(pid_field, list) and pid_field else None
+                    code = codes.get(pid)
+                    if not code:
+                        code = (
+                            pid_field[1]
+                            if isinstance(pid_field, list) and len(pid_field) > 1 and pid_field[1]
+                            else "?"
+                        )
+                    qty = ol.get("product_uom_qty") or 0
+                    uom = self._uom_short_label(ol.get("product_uom"))
+                    qty_str = _fmt_qty(qty) + (f" {uom}" if uom else "")
+                    lines.append(f"    {j}) {code} - {qty_str}")
 
             lines.append("\n" + "=" * 70)
 
@@ -4722,11 +4893,14 @@ class OdooSalesTools(Toolkit):
             if not partner_id:
                 return f"\nCustomer '{customer}' not found"
 
-            # Search recent orders (last 90 days, any state)
+            # Search recent orders (last 90 days). Cancelled orders are dropped —
+            # the customer cannot act on them; drafts stay because the bot's own
+            # just-created quotations are the usual "add to my order" target.
             orders = client.search_orders(
                 partner_id=partner_id,
                 days=90,
                 limit=limit,
+                exclude_states=["cancel"],
             )
 
             if not orders:
@@ -5442,7 +5616,8 @@ class OdooSalesTools(Toolkit):
     ) -> str:
         """Query a customer's past order lines across all orders (e.g. "Have I
         ordered 227707 before?"). Portal users: own history only (customer
-        auto-detected); internal users must pass customer.
+        auto-detected); internal users must pass customer. Cancelled and draft
+        orders are excluded — history means orders actually placed.
 
         Args:
             product_code: 6-digit product code; None = all lines in the period

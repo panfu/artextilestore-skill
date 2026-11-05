@@ -1642,6 +1642,7 @@ class OdooClient:
                     "state",
                     "partner_id",
                     "amount_total",
+                    "currency_id",
                     "date_order",
                 ],
                 "limit": limit,
@@ -2006,7 +2007,9 @@ class OdooClient:
             partner_id: Customer partner ID to filter by
             product_code: Optional product default_code filter (e.g., "227707")
             days: Time range in days (default 180)
-            exclude_states: Order states to exclude (default: ["cancel"])
+            exclude_states: Order states to exclude (default: ["cancel", "draft"]
+                — history means orders the customer actually placed, so
+                unconfirmed draft quotations don't count)
             limit: Maximum results (default 100)
 
         Returns:
@@ -2015,7 +2018,7 @@ class OdooClient:
         from datetime import timedelta
 
         if exclude_states is None:
-            exclude_states = ["cancel"]
+            exclude_states = ["cancel", "draft"]
 
         domain = [
             ["order_id.partner_id", "=", partner_id],

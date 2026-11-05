@@ -26,8 +26,12 @@ artex.py product-search "cotton poplin" --limit 10
 # 品牌/系列(含分类链接)
 artex.py brand carnet
 
-# 色卡册(4 位册号)内在库产品
-artex.py sample-book 6606
+# collections/系列搜索(含品牌与 bunch;oa_chat customer sales report 同定义)
+artex.py collections Fantasia            # 模糊匹配
+artex.py collections 8239 --exact --limit 5
+
+# bunch(= sample book 色卡册,官方术语 bunch;4 位册号)内在库产品
+artex.py bunch 6606
 ```
 
 ## 客户资料(必须 --as 或 --internal-view)
