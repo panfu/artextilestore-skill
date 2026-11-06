@@ -18,7 +18,7 @@ description: |
 
 ```bash
 ~/ar/chatbot/.venv/bin/python ~/.agents/skills/artextilestore/artex.py <command> [args]
-# 全局旗标(放在子命令前):--as <客户> / --internal-view / --env-file <path>
+# 全局旗标(放在子命令前):--as <客户> / --env-file <path>
 ```
 
 先跑一次 `artex.py doctor` 可确认环境与连通性;`artex.py list` 列出全部能力。
@@ -44,7 +44,7 @@ artex.py unset odoo_base_url                # 清除一项
 
 - 存 `~/.config/artex/config.env`(0600)。`odoo_base_url` 默认 `https://www.artexilestore.com`(生产)。
 - **`odoo_base_url` 一经设置即全局生效**,压过 .env 与 identities 文件里的环境坐标——切 UAT 一行搞定;`*.dev.odoo.com` 域名自动推断库名。
-- 快速启动三件套:`set odoo_base_url`(可省)+ `set odoo_login` + `set odoo_api_key`,之后 `artex orders` 不带 `--as` 即以该客户身份执行(显式 `--as` / `--internal-view` 仍优先)。
+- 快速启动三件套:`set odoo_base_url`(可省)+ `set odoo_login` + `set odoo_api_key`,之后 `artex orders` 不带 `--as` 即以该客户身份执行(显式 `--as` 仍优先)。
 - 凭证优先级:`--password` > identities 文件 > `ARTEX_PORTAL_PASSWORD` > config 的 `odoo_api_key`。
 
 ## 身份与权限(最重要,先读)
@@ -53,13 +53,11 @@ artex.py unset odoo_base_url                # 清除一项
 |---|---|
 | 公共目录:产品/库存/色卡/品牌 | 直接调(系统账号) |
 | 以客户视角查订单/地址/报价/历史 | 加 `--as <客户码或login>`,走该客户真实 portal session |
-| 内部视角看客户数据 | 加 `--internal-view`(输出仅供内部,不得转给客户) |
 
 铁律:
 1. **客户视角操作必须 `--as`**——查询结果与下单权限属于该客户在 Odoo 的真实权限(portal 看不到原价/折扣/他人订单)。绝不能用系统账号替客户查/下单。
-2. `--internal-view` 输出含价格与备注,**不得**转发给客户或粘贴到面向客户的渠道。
-3. 本 skill **面向客户使用,内部办公不用它**:不提供任何仅内部命令(客户搜索等已移除),`--internal-view` 仅限配置了系统凭据的内部机器排障,输出不得外发。
-4. 本 skill 只读;建单/改单不在 CLI 内(如需,引导用户走 chatbot 渠道或人工)。
+2. 本 skill **面向客户使用,内部办公不用它**(2026-11-06 定):无任何内部视角入口(`--internal-view`、客户搜索已移除);内部办公查数据走 bridge / oa_chat / odoo_app。
+3. 本 skill 只读;建单/改单不在 CLI 内(如需,引导用户走 chatbot 渠道或人工)。
 
 ## 速查
 
@@ -74,7 +72,7 @@ artex.py unset odoo_base_url                # 清除一项
 ## 子命令索引
 
 公共(直接调):`product` / `product-search` / `brand` / `collections` / `bunch`
-客户资料(须 `--as` 或 `--internal-view`):`orders` / `order` / `order-history` / `dye-lot` / `addresses` / `price-quote` / `carriers` / `small-order-check`
+客户资料(须 `--as`):`orders` / `order` / `order-history` / `dye-lot` / `addresses` / `price-quote` / `carriers` / `small-order-check`
 元:`doctor` / `list` / `set` / `unset`
 > 本 skill 面向客户使用,内部办公不用它——无任何仅内部命令(customer 搜索已移除)。
 > 术语约定:**bunch** 是 sample book(色卡册)的官方术语,输出与文档一律用 bunch;`collections` 按 oa_chat customer sales report 同定义(Brand & Collection 根类目下全部子类目:品牌/collections/bunch)。

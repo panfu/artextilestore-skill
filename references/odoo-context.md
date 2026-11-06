@@ -26,9 +26,9 @@ session**(OdooClient 以客户凭据 authenticate),工具方法内所有 Odoo �
 - portal 只能读自己的订单/地址/历史(两层都拦)
 - `get_price_quote`:portal 只见最终价,无原价/折扣
 - `list_shipping_carriers`:portal 的 customer 参数被钉死为本人 partner_id
-- `search_customer`(内部备注)对 portal 身份直接拒绝
 
-`--internal-view` 才使用系统账号查客户数据,输出带警示。
+本 skill 无内部视角入口(`--internal-view` 已移除):客户资料只能以 portal
+身份查,系统账号仅限公共目录。内部办公查数据走 bridge / oa_chat / odoo_app。
 
 ## 常用模型速查
 

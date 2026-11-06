@@ -2,13 +2,13 @@
 
 artex CLI skill 的分发仓库——让 Claude Code / ZCode / Codex 具备
 Artextile(Odoo)业务数据能力(产品/库存/色卡/染缸/客户/订单/报价),
-客户视角操作走真实 portal 权限(`--as`,API key),内部视角需显式
-`--internal-view`。
+客户视角操作走真实 portal 权限(`--as`,API key)。**skill 只面向客户使用,
+无任何内部视角入口**(内部办公走 bridge/oa_chat/odoo_app)。
 
 **自包含**:不依赖任何 `~/ar` 工作区。仓库自带 vendored 运行时
 (`vendor/ar_chatbot` 精简子集)+ 自动创建独立 venv(`~/.config/artex/venv`,
-需 python ≥3.10 或 uv)。有 `~/ar/chatbot` 检出的内部机器自动升级为
-full 模式(支持 `--internal-view`)。
+需 python ≥3.10 或 uv)。有 `~/ar/chatbot` 检出的机器自动升级为 full 模式
+(直接用该检出与 `.env`,免建独立 venv)。
 
 ## 一句话安装
 
@@ -52,5 +52,6 @@ artex orders
 ## 安全
 
 - 仓库内与 skill 输出中**没有也不允许出现**任何凭据;凭据只存于本机
-  `~/.config/artex/identities/`(0600)或内部机器的 `~/ar/chatbot/.env`。
-- `--internal-view` 输出含价格/备注,不得转发给客户。
+  `~/.config/artex/`(0600)或内部机器的 `~/ar/chatbot/.env`。
+- skill 面向客户:客户资料只能以客户本人 portal 身份查,系统账号仅限
+  公共目录;无内部视角入口。

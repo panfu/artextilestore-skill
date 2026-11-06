@@ -4,14 +4,12 @@
 
 ```
 --as <客户码|portal login|identities 别名>   # 以该客户身份(portal session)执行
---internal-view                              # 内部视角查客户数据(与 --as 互斥)
 --env-file <path>                            # 覆盖 .env(默认 ARTEX_ENV_FILE 或 ~/ar/chatbot/.env)
 --password <cred>                            # 一次性提供 portal 凭据(不推荐,会进 shell 历史)
 ```
 
 输出约定:stderr 首行 `# env: <db> @ <host> | identity: ...` 标明本次查询的
-环境与身份;内部视角额外带 `# WARNING: internal view` 警示行。业务数据在
-stdout,为繁体中文格式化文本(与 chatbot 客户端所见一致)。
+环境与身份。业务数据在 stdout,为繁体中文格式化文本(与 chatbot 客户端所见一致)。
 
 ## 公共目录(系统账号即可)
 
@@ -34,10 +32,10 @@ artex.py collections 8239 --exact --limit 5
 artex.py bunch 6606
 ```
 
-## 客户资料(必须 --as 或 --internal-view)
+## 客户资料(必须 --as)
 
 ```bash
-# 客户视角(真实 portal 权限:只见自己的订单/最终价格)
+# 客户视角(真实 portal 权限:只见自己的订单/最终价格)——本 skill 唯一的视角
 artex.py --as E0056 orders                          # 近 90 天订单
 artex.py --as E0056 orders --days 30 --state sale
 artex.py --as E0056 order SO00123                   # 订单详情
@@ -47,10 +45,6 @@ artex.py --as E0056 addresses
 artex.py --as E0056 price-quote "660302 1600 5Y"    # portal 只见最终价
 artex.py --as E0056 carriers --order SO00123        # 物流商+运费(portal 钉死本人)
 artex.py --as E0056 small-order-check SO00123 660302
-
-# 内部视角(跨客户、含原价折扣;输出不得给客户)
-artex.py --internal-view orders E0056
-artex.py --internal-view price-quote E0056 "660302 1600 5Y"
 ```
 
 `--as` 的解析顺序:identities 别名文件(`~/.config/artex/identities/<别名>.env`)
@@ -86,7 +80,7 @@ artex.py unset odoo_base_url
 - URL:`odoo_base_url` > identities 文件 `ARTEX_ODOO_URL` > `.env` 的 `ODOO_URL` > 生产默认
 - DB:`odoo_db` > 按 URL 推断(`*.dev.odoo.com`) > identities `ARTEX_ODOO_DB` > `.env` 的 `ODOO_DB` > 生产默认(仅生产域)
 - 凭证:`--password` > identities `ARTEX_CREDENTIAL` > `ARTEX_PORTAL_PASSWORD` > `odoo_api_key`
-- 身份:显式 `--as` / `--internal-view` > `odoo_login` > 系统身份
+- 身份:显式 `--as` > `odoo_login` > 系统身份
 
 **典型场景**
 

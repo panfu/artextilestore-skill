@@ -4,22 +4,22 @@
 薄封裝:子命令直接映射 ar_chatbot.tools.odoo_tools.OdooSalesTools 的業務方法,
 不重寫業務邏輯;能力與 chatbot 同源,隨上游演進。
 
-身份模型(權限設計,2026-10 與 Fred 對齊):
+身份模型(權限設計,2026-10 與 Fred 對齊;2026-11-06 收斂為純客戶面):
 - 預設(system):系統服務帳號,僅公共目錄類查詢(產品/庫存/色卡/品牌)。
 - --as <客戶>:以該客戶的 Odoo portal session 執行。權限由兩層共同約束:
   Odoo 原生 record rules(只能讀自己的訂單/地址)+ 應用層
   PortalRestrictionChecker / restricted_customer_id(不能看原價折扣、
   只能給自己 partner 下單)。客戶視角操作必須走這條路,不得用系統帳號代理。
-- --internal-view:內部視角查看客戶範圍數據(輸出帶警示頭,不得轉發給客戶)。
 
 命令身份矩陣:
 - 公共目錄:product / product-search / brand / collections / bunch — 兩種身份皆可
   (術語:bunch 為 sample book/色卡冊的官方稱謂,一律用 bunch)
 - 客戶資料:orders / order / order-history / dye-lot / addresses / price-quote /
-  carriers / small-order-check — 必須 --as 或 --internal-view 二選一
+  carriers / small-order-check — 必須 --as(portal 身份)
 
 定位(2026-11-06 Fred 定):本 skill 面向客戶使用,內部辦公不用它——
-不提供任何僅內部的命令(客戶搜索等已移除),減少面向客戶分發的面。
+無任何內部視角入口(--internal-view 已移除),客戶資料只能以客戶本人
+portal 身份查(內部辦公走 bridge / oa_chat / odoo_app)。
 
 憑證治理:portal 憑證(--password / ARTEX_PORTAL_PASSWORD /
 ~/.config/artex/identities/<別名>.env 的 ARTEX_CREDENTIAL / artex set
@@ -438,7 +438,7 @@ def resolve_customer_code_to_login(code: str) -> str:
     if not users:
         raise SystemExit(
             f"artex: 客戶 {partners[0]['name']} 沒有 portal 帳號(share=True 的 res.users)。"
-            "內部查看請用 --internal-view。"
+            "請改用該客戶的 portal login。"
         )
     if len(users) > 1:
         logins = " / ".join(u["login"] for u in users)
@@ -579,16 +579,14 @@ def build_tools(identity):
 def enforce_identity_matrix(args, identity) -> None:
     cmd = args.command
     is_portal = isinstance(identity, PortalIdentity)
-    if is_portal and args.internal_view:
-        raise SystemExit("artex: --internal-view 與 --as 互斥(內部視角請去掉 --as)。")
-    if cmd in CUSTOMER_DATA_COMMANDS and not is_portal and not args.internal_view:
+    if cmd in CUSTOMER_DATA_COMMANDS and not is_portal:
         raise SystemExit(
             f"artex: '{cmd}' 屬客戶資料查詢,不得用系統帳號執行。"
-            "客戶視角請加 --as <客戶>;內部視角請顯式加 --internal-view(輸出僅供內部)。"
+            "請加 --as <客戶> 以客戶本人身份查詢(本 skill 僅提供客戶視角)。"
         )
 
 
-def banner(identity, internal_view: bool, stream=None) -> None:
+def banner(identity, stream=None) -> None:
     stream = stream or sys.stderr
     if isinstance(identity, PortalIdentity):
         db = identity.odoo_db or "?"
@@ -602,11 +600,6 @@ def banner(identity, internal_view: bool, stream=None) -> None:
     else:
         who = f"system {os.environ.get('ODOO_USER', '?')}"
     print(f"# env: {db} @ {host} | identity: {who}", file=stream)
-    if internal_view:
-        print(
-            "# WARNING: internal view — 客戶範圍數據(含價格/折扣/備註),不得轉發給客戶",
-            file=stream,
-        )
 
 
 # ── doctor / list ──────────────────────────────────────────────────
@@ -632,8 +625,7 @@ def cmd_doctor() -> int:
     print(f"ODOO_USER    : {os.environ.get('ODOO_USER') or os.environ.get('ODOO_USER_INTERNAL', '') or '(未設置)'}")
     if not has_creds:
         print(
-            "客戶模式(無系統憑證):公共目錄查詢與 --as 客戶身份可用;"
-            "內部視角(--internal-view)不可用。\n"
+            "客戶模式(無系統憑證):公共目錄查詢與 --as 客戶身份可用。\n"
             "快速啟動:artex set odoo_login <login> + artex set odoo_api_key <key>;"
             "或 artex login 綁定客戶身份。"
         )
@@ -871,13 +863,11 @@ def add_subcommands(sub) -> None:
     p.add_argument("order_ref")
 
     p = sub.add_parser("order-history", help="歷史訂單行(客戶資料;portal 自動限本人)")
-    p.add_argument("--customer", help="internal 視角必須給")
     p.add_argument("--product", help="6 位產品編號")
     p.add_argument("--days", type=int, default=180)
 
     p = sub.add_parser("dye-lot", help="染缸/批次資訊(客戶資料;portal 自動限本人)")
     p.add_argument("code")
-    p.add_argument("--customer")
     p.add_argument("--days", type=int, default=365)
 
     p = sub.add_parser("addresses", help="客戶收貨地址(客戶資料)")
@@ -936,13 +926,9 @@ def run_command(args, tools) -> str:
     if cmd == "order":
         return tools.get_order_detail(args.order_ref)
     if cmd == "order-history":
-        return tools.query_order_history(
-            product_code=args.product, customer=args.customer, days=args.days
-        )
+        return tools.query_order_history(product_code=args.product, days=args.days)
     if cmd == "dye-lot":
-        return tools.query_dye_lot_info(
-            args.code, customer=args.customer, days=args.days
-        )
+        return tools.query_dye_lot_info(args.code, days=args.days)
     if cmd == "addresses":
         return tools.list_customer_addresses(args.customer)
     if cmd == "price-quote":
@@ -968,11 +954,6 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--password",
         help="portal 憑證(優先級最高;建議改用 ARTEX_PORTAL_PASSWORD 或 identities 檔)",
-    )
-    parser.add_argument(
-        "--internal-view",
-        action="store_true",
-        help="內部視角查看客戶資料(與 --as 互斥;輸出帶警示,不得外發)",
     )
     parser.add_argument("--env-file", help="覆蓋 .env 路徑(默認 ARTEX_ENV_FILE 或 ~/ar/chatbot/.env)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1000,15 +981,15 @@ def main(argv=None) -> int:
 
     import_ar_chatbot()
     as_who = args.as_who
-    if not as_who and not args.internal_view and cfg.get("odoo_login"):
-        # 快速啟動:config 的 odoo_login 為默認身份(顯式 --as / --internal-view 優先)
+    if not as_who and cfg.get("odoo_login"):
+        # 快速啟動:config 的 odoo_login 為默認身份(顯式 --as 優先)
         as_who = cfg["odoo_login"]
     identity = (
         build_portal_identity(as_who, args.password) if as_who else SystemIdentity()
     )
     enforce_identity_matrix(args, identity)
     tools = build_tools(identity)
-    banner(identity, args.internal_view)
+    banner(identity)
     print(run_command(args, tools))
     return 0
 
