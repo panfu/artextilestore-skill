@@ -93,3 +93,18 @@ artex.py set odoo_login customer@wear.com
 artex.py set odoo_api_key <key>
 # 生产默认地址可省 odoo_base_url;UAT 则按上面一行切换
 ```
+
+**下单(2026-11-21;仅客户本人 portal 身份,需 Odoo 侧 artex_oauth_panfu ≥1.1)**
+
+| 命令 | 参数 | 说明 |
+|---|---|---|
+| `order-create` | `[--shipping ADDRESS_ID] [--invoice ADDRESS_ID]` | 建草稿单;地址省略=本人默认地址,传入的 id 必须属于本人 |
+| `order-add` | `ORDER CODE:QTY[y\|m] [--po PO] [--remark 备注]` | 仅接受 `660302:3y` / `660302:5m` 格式;**价格一律服务端按客户价计算,带价格的 spec 会被拒** |
+| `order-show` | `[ORDER] [--limit N]` | 详请含草稿;省略 ORDER 列最近订单;只显示本人订单 |
+| `order-confirm` | `ORDER` | 正式下单;须 draft/sent 态且已有订单行 |
+| `order-cancel` | `ORDER` | 取消(draft/sent/sale 态) |
+
+- ORDER 接受订单号(`SO01555`)或数字 id。
+- 服务端闸门(与 WeChat 渠道一致):停産(oos)拒、低库存(<8yd)拒(需人工跟进)、库存不足拒(除非产品允许超卖)、按品牌 MOQ(默认 0.1yd,Carnet 0.5m)、窄幅(<145cm)仅警告。
+- CLI 侧三重拦截:系统身份拒 → 非 portal 绑定拒 → 密码模式拒(下单必须 API key 身份);Odoo 侧 `artex_oauth_panfu` 再强制本人 partner + pricelist 定价。
+- 典型流:`order-create` → `order-add`(逐行)→ `order-show` 核对 → `order-confirm`。

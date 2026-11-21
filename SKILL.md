@@ -57,7 +57,17 @@ artex.py unset odoo_base_url                # 清除一项
 铁律:
 1. **客户视角操作必须 `--as`**——查询结果与下单权限属于该客户在 Odoo 的真实权限(portal 看不到原价/折扣/他人订单)。绝不能用系统账号替客户查/下单。
 2. 本 skill **面向客户使用,内部办公不用它**(2026-11-06 定):无任何内部视角入口(`--internal-view`、客户搜索已移除);内部办公查数据走 bridge / oa_chat / odoo_app。
-3. 本 skill 只读;建单/改单不在 CLI 内(如需,引导用户走 chatbot 渠道或人工)。
+3. **下单(2026-11-21 开放)仅限客户本人 portal 身份**:`order-create → order-add → order-confirm` 分步执行,每一步服务端(Odoo 模块 `artex_oauth_panfu`)都强制:订单建在调用者自己的 partner、价格由 Odoo 按客户 pricelist 计算(不接受客户端传价)、MOQ/停産/低库存/库存量闸门与 WeChat 渠道一致。内部账号身份不可下单;系统账号连查都不行。
+
+## 下单流程(客户本人身份)
+
+```bash
+artex --as E0056 order-create [--shipping ADDRESS_ID]   # 建草稿单(地址用 artex addresses 查)
+artex --as E0056 order-add SO01555 660302:3y [--po PO号] [--remark 备注]   # 加行(僅 CODE:QTYy|m)
+artex --as E0056 order-show SO01555                      # 核对(草稿也可见)
+artex --as E0056 order-confirm SO01555                   # 正式下單(最後一步,須顯式執行)
+artex --as E0056 order-cancel SO01555                    # 反悔取消
+```
 
 ## 速查
 
@@ -73,6 +83,7 @@ artex.py unset odoo_base_url                # 清除一项
 
 公共(直接调):`product` / `product-search` / `brand` / `collections` / `bunch`
 客户资料(须 `--as`):`orders` / `order` / `order-history` / `dye-lot` / `addresses` / `price-quote` / `carriers` / `small-order-check`
+下单(须客户本人 portal 身份):`order-create` / `order-add` / `order-show` / `order-confirm` / `order-cancel`
 元:`doctor` / `list` / `set` / `unset`
 > 本 skill 面向客户使用,内部办公不用它——无任何仅内部命令(customer 搜索已移除)。
 > 术语约定:**bunch** 是 sample book(色卡册)的官方术语,输出与文档一律用 bunch;`collections` 按 oa_chat customer sales report 同定义(Brand & Collection 根类目下全部子类目:品牌/collections/bunch)。

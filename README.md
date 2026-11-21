@@ -1,7 +1,7 @@
 # artextilestore-skill
 
 artex CLI skill 的分发仓库——让 Claude Code / ZCode / Codex 具备
-Artextile(Odoo)业务数据能力(产品/库存/色卡/染缸/客户/订单/报价),
+Artextile(Odoo)业务数据能力(产品/库存/色卡/染缸/客户/订单/报价/下单),
 客户视角操作走真实 portal 权限(`--as`,API key)。**skill 只面向客户使用,
 无任何内部视角入口**(内部办公走 bridge/oa_chat/odoo_app)。
 

@@ -3,13 +3,12 @@
 > 本文件供 coding agent(Claude Code / ZCode / Codex)阅读并执行。
 > 用户指令示例:"Install artextilestore skill for me by reading
 > https://github.com/panfu/artextilestore-skill/blob/main/llms.txt"
-> (私有仓库:直接抓取 403 时,用已认证的 `gh` 读取,例如
-> `gh api repos/panfu/artextilestore-skill/contents/llms.txt -q .content | base64 -d`)
 
 ## 这是什么
 
 artex CLI skill:让 coding agent 具备 Artextile(Odoo)业务数据能力——
-查产品/库存/色卡/染缸/客户/订单/报价。客户身份操作走该客户在 Odoo 的
+查产品/库存/色卡/染缸/客户/订单/报价,并可下单(order-create → order-add →
+order-confirm,僅 CODE:QTYy|m 规格、价格一律服务端按客户价计算)。客户身份操作走该客户在 Odoo 的
 真实 portal 权限(`--as`,经 API key),绝无密码传递。
 
 **不依赖任何本地 ~/ar 工作区**:仓库自带 vendored 运行时(ar_chatbot
@@ -28,8 +27,7 @@ portal 身份查),内部办公请走 bridge / oa_chat / odoo_app。
 ```bash
 # 1) clone(已存在则 pull 更新)
 [ -d ~/artex-skill-src/.git ] && git -C ~/artex-skill-src pull \
-  || git clone git@github.com:panfu/artextilestore-skill.git ~/artex-skill-src
-# 若 SSH 不通,可用:gh repo clone panfu/artextilestore-skill ~/artex-skill-src
+  || git clone https://github.com/panfu/artextilestore-skill.git ~/artex-skill-src
 
 # 2) 安装(自动探测模式;standalone 会创建 ~/.config/artex/venv 并装依赖)
 bash ~/artex-skill-src/install.sh

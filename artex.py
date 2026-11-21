@@ -16,6 +16,11 @@
   (術語:bunch 為 sample book/色卡冊的官方稱謂,一律用 bunch)
 - 客戶資料:orders / order / order-history / dye-lot / addresses / price-quote /
   carriers / small-order-check — 必須 --as(portal 身份)
+- 下單(2026-11-21 開放):order-create / order-add / order-show / order-confirm /
+  order-cancel — 僅限客戶本人 portal 身份(API key),服務端(Odoo 模塊
+  artex_oauth_panfu 的 artex_portal_* 方法)再次強制:訂單永遠建在調用者
+  自己的 partner 上、價格一律由 Odoo 按 pricelist 計算(不接受客戶端傳價)、
+  MOQ/停產/低庫存/庫存量業務閘門與 WeChat 渠道一致。內部帳號身份不可下單。
 
 定位(2026-11-06 Fred 定):本 skill 面向客戶使用,內部辦公不用它——
 無任何內部視角入口(--internal-view 已移除),客戶資料只能以客戶本人
@@ -64,6 +69,15 @@ CONFIG_KEYS = {
 }
 
 PUBLIC_COMMANDS = {"product", "product-search", "brand", "collections", "bunch"}
+# 下單命令:僅限客戶本人 portal 身份(服務端 artex_oauth_panfu 亦強制,
+# 這裡再前置攔截,錯誤信息更清晰)。絕不走系統帳號,也不接受客戶端傳價。
+ORDER_COMMANDS = {
+    "order-create",
+    "order-add",
+    "order-show",
+    "order-confirm",
+    "order-cancel",
+}
 CUSTOMER_DATA_COMMANDS = {
     "orders",
     "order",
@@ -73,7 +87,7 @@ CUSTOMER_DATA_COMMANDS = {
     "price-quote",
     "carriers",
     "small-order-check",
-}
+} | ORDER_COMMANDS
 
 
 def chatbot_root() -> Path:
@@ -580,10 +594,103 @@ def enforce_identity_matrix(args, identity) -> None:
     cmd = args.command
     is_portal = isinstance(identity, PortalIdentity)
     if cmd in CUSTOMER_DATA_COMMANDS and not is_portal:
+        if cmd in ORDER_COMMANDS:
+            raise SystemExit(
+                f"artex: '{cmd}' 是下單命令,不得用系統帳號執行。"
+                "請以客戶本人身份(artex login 後 --as <客戶>,或 artex set "
+                "odoo_login + odoo_api_key)執行。"
+            )
         raise SystemExit(
             f"artex: '{cmd}' 屬客戶資料查詢,不得用系統帳號執行。"
             "請加 --as <客戶> 以客戶本人身份查詢(本 skill 僅提供客戶視角)。"
         )
+    if cmd in ORDER_COMMANDS and identity.binding.user_type != "portal":
+        raise SystemExit(
+            f"artex: '{cmd}' 是下單命令,僅限客戶(portal)帳號執行;"
+            "內部帳號身份不可用於下單(服務端亦會拒絕)。"
+        )
+
+
+# ── 下單(Odoo artex_oauth_panfu artex_portal_* 方法) ──────────────
+
+ORDER_SPEC_RE = re.compile(r"^([A-Za-z0-9_.\-]+):(\d+(?:\.\d+)?)(yd|y|m)$")
+
+
+def _fmt_order_payload(res: Dict[str, Any], title: str) -> str:
+    out = [f"\n{'=' * 60}", title, "=" * 60]
+    out.append(f"  Order:      {res.get('order_name')} (id {res.get('order_id')})")
+    out.append(f"  State:      {res.get('state')}")
+    if res.get("shipping"):
+        out.append(f"  Shipping:   {res['shipping']}")
+    if res.get("amount_untaxed") is not None:
+        out.append(f"  Amount:     {res['amount_untaxed']} {res.get('currency', '')} (untaxed)")
+    for ln in res.get("lines", []):
+        disc = f" (-{ln['discount']}%)" if ln.get("discount") else ""
+        out.append(f"    [{ln['code']}] {ln['product']}")
+        out.append(f"      {ln['qty']} {ln['uom']} × {ln['price_unit']}{disc} = {ln['subtotal']}")
+        if ln.get("customer_po"):
+            out.append(f"      PO: {ln['customer_po']}")
+        if ln.get("remark"):
+            out.append(f"      Remark: {ln['remark']}")
+    if res.get("portal_url"):
+        out.append(f"  Portal URL: {res['portal_url']}")
+    return "\n".join(out)
+
+
+def run_order_command(args, identity) -> str:
+    client = identity.client
+    if not isinstance(client, ApiKeyOdooClient):
+        raise SystemExit(
+            "artex: 下單命令需要 API key 身份(artex login 取得,或 artex set "
+            "odoo_login + odoo_api_key);密碼模式不支持下單。"
+        )
+    cmd = args.command
+    if cmd == "order-create":
+        res = client._call("sale.order", "artex_portal_create", [], {
+            "shipping_address_id": args.shipping,
+            "invoice_address_id": args.invoice,
+        })
+        return _fmt_order_payload(res, "草稿訂單已建立(order-add 加行,order-confirm 下單)")
+    if cmd == "order-add":
+        m = ORDER_SPEC_RE.match((args.spec or "").strip())
+        if not m:
+            raise SystemExit(
+                f"artex: 規格格式錯誤 '{args.spec}'。期望 CODE:QTYy 或 CODE:QTYm"
+                "(如 660302:3y、660302:5m)。價格由服務端按您的客戶價計算,不接受指定價格。"
+            )
+        code, qty, unit = m.group(1), float(m.group(2)), m.group(3)
+        res = client._call("sale.order", "artex_portal_add_line", [], {
+            "order_id": args.order,
+            "product_code": code,
+            "qty": qty,
+            "unit": unit,
+            "customer_po": args.po,
+            "line_remark": args.remark,
+        })
+        disc = f" (-{res['discount']}%)" if res.get("discount") else ""
+        out = [
+            f"\n已加入訂單行:{res['order_name']} (id {res['order_id']})",
+            f"  [{res['code']}] {res['product']}",
+            f"  {res['qty']} {res['uom']} × {res['price_unit']}{disc} = {res['subtotal']}",
+        ]
+        out += [f"  [!] {w}" for w in res.get("warnings", [])]
+        return "\n".join(out)
+    if cmd == "order-show":
+        results = client._call("sale.order", "artex_portal_read", [], {
+            "order_name": None if (args.order or "").isdigit() else args.order,
+            "order_id": args.order if (args.order or "").isdigit() else None,
+            "limit": 1 if args.order else args.limit,
+        })
+        if not results:
+            return f"\n沒有找到訂單{f' {args.order}' if args.order else ''}(僅顯示您本人的訂單)。"
+        return "\n".join(_fmt_order_payload(r, "訂單詳情") for r in results)
+    if cmd == "order-confirm":
+        res = client._call("sale.order", "artex_portal_confirm", [], {"order_id": args.order})
+        return _fmt_order_payload(res, "訂單已確認 ✅(已正式下單)")
+    if cmd == "order-cancel":
+        res = client._call("sale.order", "artex_portal_cancel", [], {"order_id": args.order})
+        return _fmt_order_payload(res, "訂單已取消")
+    raise SystemExit(f"artex: 未知下單命令 {cmd}")
 
 
 def banner(identity, stream=None) -> None:
@@ -885,6 +992,29 @@ def add_subcommands(sub) -> None:
     p.add_argument("order_ref")
     p.add_argument("code")
 
+    # ── 下單(僅客戶 portal 身份;服務端 artex_oauth_panfu) ──
+    p = sub.add_parser("order-create", help="建立草稿訂單(下單第 1 步;僅客戶身份)")
+    p.add_argument("--shipping", type=int, metavar="ADDRESS_ID",
+                   help="收貨地址 id(artex addresses 查看;默認用您帳號默認地址)")
+    p.add_argument("--invoice", type=int, metavar="ADDRESS_ID",
+                   help="發票地址 id(默認同收貨地址)")
+
+    p = sub.add_parser("order-add", help="加產品行到草稿訂單(如 660302:3y;價格服務端按客戶價計)")
+    p.add_argument("order", help="訂單號(SO00123)或 id")
+    p.add_argument("spec", help="CODE:QTYy 或 CODE:QTYm(如 660302:3y、660302:5m)")
+    p.add_argument("--po", help="該行 Customer PO 號")
+    p.add_argument("--remark", help="該行備註(≤255 字符)")
+
+    p = sub.add_parser("order-show", help="訂單詳情(含草稿;僅本人訂單)")
+    p.add_argument("order", nargs="?", help="訂單號(SO00123)或 id;省略則列最近的訂單")
+    p.add_argument("--limit", type=int, default=10, help="省略訂單號時列出的條數(默認 10)")
+
+    p = sub.add_parser("order-confirm", help="確認訂單(下單最後一步;須草稿/報價狀態)")
+    p.add_argument("order", help="訂單號(SO00123)或 id")
+
+    p = sub.add_parser("order-cancel", help="取消訂單(草稿/報價/已確認未出貨均可)")
+    p.add_argument("order", help="訂單號(SO00123)或 id")
+
     sub.add_parser("doctor", help="環境自檢(env/憑證/連通性)")
     sub.add_parser("list", help="列印能力與身份矩陣")
 
@@ -988,6 +1118,12 @@ def main(argv=None) -> int:
         build_portal_identity(as_who, args.password) if as_who else SystemIdentity()
     )
     enforce_identity_matrix(args, identity)
+    if args.command in ORDER_COMMANDS:
+        # 下單命令直連 Odoo artex_oauth_panfu 的 artex_portal_* 方法,
+        # 不經 OdooSalesTools(那是查詢工具層,訂單寫操作必須走受控入口)。
+        banner(identity)
+        print(run_order_command(args, identity))
+        return 0
     tools = build_tools(identity)
     banner(identity)
     print(run_command(args, tools))
